@@ -1,0 +1,43 @@
+- name: Ensure pip is installed
+  apt:
+    name: python3-pip
+    state: present
+  become: true
+
+- name: Install required Python packages
+  pip:
+    name:
+      - apache-airflow==2.8.0
+      - psycopg2-binary
+      - cryptography
+    executable: pip3
+
+- name: Create Airflow folders
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - ~/airflow
+    - ~/airflow/dags
+    - ~/airflow/logs
+
+- name: Initialize Airflow database
+  shell: airflow db init
+  args:
+    chdir: ~/airflow
+  environment:
+    AIRFLOW_HOME: ~/airflow
+
+- name: Create admin user
+  shell: |
+    airflow users create \
+      --username admin \
+      --firstname Admin \
+      --lastname User \
+      --role Admin \
+      --email admin@example.com \
+      --password admin
+  environment:
+    AIRFLOW_HOME: ~/airflow
+  ignore_errors: true

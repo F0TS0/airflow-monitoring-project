@@ -1,0 +1,127 @@
+- name: Provision Airflow
+  hosts: airflow
+  become: true
+
+  tasks:
+    - name: Ensure Airflow config directory exists
+      file:
+        path: /opt/airflow/config
+        state: directory
+
+    - name: Set up Airflow environment variables
+      copy:
+        dest: /opt/airflow/config/env.sh
+        mode: "0644"
+        content: |
+          export AIRFLOW__CORE__EXECUTOR=LocalExecutor
+          export AIRFLOW__CORE__FERNET_KEY=46LdzKUtakRxAGH28WSWlKUAR3AKAMlDGD4NI-c7oIs=
+          export AIRFLOW__CORE__LOAD_EXAMPLES=False
+          export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+          export AIRFLOW__SMTP__SMTP_HOST=smtp4dev
+          export AIRFLOW__SMTP__SMTP_PORT=25
+          export AIRFLOW__SMTP__SMTP_MAIL_FROM=airflow@example.com
+
+    - name: Set Airflow Fernet key globally
+      lineinfile:
+        path: /etc/environment
+        regexp: "^AIRFLOW__CORE__FERNET_KEY="
+        line: "AIRFLOW__CORE__FERNET_KEY=46LdzKUtakRxAGH28WSWlKUAR3AKAMlDGD4NI-c7oIs="
+
+    - name: Ensure env script is sourced in bashrc
+      lineinfile:
+        path: ~/.bashrc
+        line: "source /opt/airflow/config/env.sh"
+        create: yes
+
+    - name: Install python libs required by community.docker
+      ansible.builtin.pip:
+        name: [requests, docker]
+        executable: pip3
+        state: present
+
+    - name: Remove existing airflow_network (if any)
+      community.docker.docker_network:
+        name: airflow_network
+        state: absent
+      ignore_errors: true
+
+    - name: Ensure Docker network "airflow_network" exists
+      community.docker.docker_network:
+        name: airflow_network
+        state: present
+
+    - name: Ensure local DAG folder exists on host
+      file:
+        path: "{{ lookup('env','HOME') }}/Downloads/memflow/dags"
+        state: directory
+        mode: "0755"
+
+    - name: Remove old Airflow container if it exists
+      community.docker.docker_container:
+        name: airflow
+        state: absent
+        force_kill: true
+        keep_volumes: false
+      ignore_errors: true
+
+    - name: Launch Airflow container
+      community.docker.docker_container:
+        name: airflow
+        image: apache/airflow:2.8.0
+        restart_policy: always
+        command: ["airflow", "standalone"]
+        published_ports:
+          - "8080:8080"
+        networks:
+          - name: airflow_network
+        volumes:
+          - "{{ lookup('env','HOME') }}/Downloads/memflow/dags:/opt/airflow/dags"
+        env:
+          AIRFLOW__CORE__EXECUTOR: LocalExecutor
+          AIRFLOW__CORE__FERNET_KEY: 46LdzKUtakRxAGH28WSWlKUAR3AKAMlDGD4NI-c7oIs=
+          AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+          AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+          AIRFLOW__SMTP__SMTP_HOST: smtp4dev
+          AIRFLOW__SMTP__SMTP_PORT: "25"
+          AIRFLOW__SMTP__SMTP_MAIL_FROM: airflow@example.com
+
+    - name: Test Postgres connection inside Airflow container
+      community.docker.docker_container_exec:
+        container: airflow
+        argv:
+          - bash
+          - -c
+          - "pg_isready -h postgres -p 5432 || exit 1"
+      register: _pg_isready
+      retries: 10
+      delay: 5
+      until: _pg_isready.rc == 0
+
+    - name: Initialise Airflow metadata DB
+      community.docker.docker_container_exec:
+        container: airflow
+        argv:
+          - airflow
+          - db
+          - upgrade
+
+    - name: Create Airflow admin user
+      community.docker.docker_container_exec:
+        container: airflow
+        argv:
+          - airflow
+          - users
+          - create
+          - --username
+          - Admin
+          - --firstname
+          - Admin
+          - --lastname
+          - User
+          - --role
+          - Admin
+          - --email
+          - Admin@example.com
+          - --password
+          - admin
+      ignore_errors: true
